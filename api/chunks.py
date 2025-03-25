@@ -11,12 +11,13 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain_openai import ChatOpenAI
 
-# получим переменные окружения из .env
-load_dotenv('api/.env')
-
 class Chunk():
     
     def __init__(self):
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY не указан в переменных окружения")
+
         self.base_load()
         self.user_memory = {}
         
