@@ -4,7 +4,9 @@ from api.chunks import Chunk                        # модуль для раб
 from fastapi.middleware.cors import CORSMiddleware  # класс для работы с CORS
 from fastapi.responses import JSONResponse
 from fastapi import FastAPI, HTTPException
-
+from fastapi import HTTPException
+from openai import AsyncOpenAI
+import os
 # создаем объект приложения FastAPI
 app = FastAPI()
 
@@ -74,3 +76,30 @@ async def global_exception_handler(request, exc):
         status_code=500,
         content={"message": f"Ошибка сервера: {str(exc)}"},
     )
+    
+    
+    
+@app.get("/api/check_openai_key")
+async def check_openai_key():
+    api_key = os.getenv("OPENAI_API_KEY")
+    
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY не задан!")
+
+    client = AsyncOpenAI(api_key=api_key)
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Say 'API is working!'."}
+            ],
+            max_tokens=10
+        )
+        if response.choices:
+            return {"success": True, "message": response.choices[0].message.content}
+        else:
+            return {"success": False, "message": "No response from OpenAI API."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
