@@ -1,3 +1,6 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
+from api.chunks import Chunk 
 from fastapi import FastAPI                         # библиотека FastAPI
 from pydantic import BaseModel                      # модуль для объявления структуры данных
 from api.chunks import Chunk                        # модуль для работы с OpenAI

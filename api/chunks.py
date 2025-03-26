@@ -1,43 +1,43 @@
-from dotenv import load_dotenv
+
 import os
-from openai import OpenAI
-from openai import AsyncOpenAI
+import openai
+from fastapi import HTTPException, status
 from langchain.text_splitter import MarkdownHeaderTextSplitter
 from langchain.docstore.document import Document
 from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings
-from fastapi import HTTPException, status
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
-from langchain_openai import ChatOpenAI
 
 class Chunk():
-    
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise HTTPException(status_code=500, detail="OPENAI_API_KEY не указан в переменных окружения")
 
+        # Передаём ключ в официальный openai
+        openai.api_key = self.api_key
+
         self.base_load()
         self.user_memory = {}
-        
+
+        # Системное сообщение
+        self.system = """
+        ... (ваш большой текст про роли, правила, курсы и т.д.) ...
+        """
+
     def base_load(self):
-        # читаем текст базы знаний
         with open('api/base/SF.txt', 'r', encoding='utf-8') as file:
             document = file.read()
 
-        # создаем список чанков на основе markdown-заголовков ##
         headers_to_split_on = [
             ("##", "header")
         ]
-
         splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-
         chunks = splitter.split_text(document)
-        
         source_chunks = [Document(page_content=chunk.page_content, metadata=chunk.metadata) for chunk in chunks]
 
-        embeddings = OpenAIEmbeddings()
+        embeddings = OpenAIEmbeddings()  # из langchain_openai
         self.db = FAISS.from_documents(source_chunks, embeddings)
 # Введи проактивную бессеу, спрашивай у клиента что его интересует. 
         self.system = '''
@@ -100,14 +100,13 @@ class Chunk():
 
     async def request(self, system, user, model='gpt-4o-mini', temp=None, format: dict=None):
 
-        client = AsyncOpenAI()
         messages = [
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': user}
         ]
 
         try:
-            response = await client.chat.completions.create(
+            response = await openai.ChatCompletion.acreate(
                 model=model,
                 messages=messages,
                 temperature=temp,
@@ -119,46 +118,51 @@ class Chunk():
             else:
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                     detail='Не удалось получить ответ от модели.')
-
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 detail=f'Ошибка при запросе в OpenAI: {e}')
 
     async def get_answer_async(self, user_id: int, query: str, verbose=True):
+        # Если память для пользователя ещё не создана — создаём
         if user_id not in self.user_memory:
-            self.user_memory[user_id] = ConversationBufferWindowMemory(llm=ChatOpenAI(model_name='gpt-4o-mini'), k=3)
-        
+            # Обычно memory не требует параметра llm=, можно убрать
+            self.user_memory[user_id] = ConversationBufferWindowMemory(k=3)
+
+        # Вытаскиваем историю
         history = self.user_memory[user_id].load_memory_variables({})
-        
         if isinstance(history['history'], str):
             conversation_history = history['history']
         else:
+            # Если в history['history'] массив сообщений, соберём их
             conversation_history = "\n".join(msg.content for msg in history['history'])
-                                
+
+        # Ищем похожие куски в FAISS
         docs = self.db.similarity_search(query, k=3)
         message_content = '\n'.join([doc.page_content for doc in docs])
-        
-    # Если verbose=True, выводим чанки в терминал
+
         if verbose:
             print('-----------------------------------------------')
             print('Релевантные чанки:\n', message_content)
             print('-----------------------------------------------')
             print('История диалога:\n', conversation_history)
 
-
-        user = f'''
+        # Формируем prompt c учётом найденных чанков
+        user_prompt = f"""
             Ты онлайн-консультант в детской онлайн-школе.
             Ответь на вопрос клиента. Не упоминай документ с информацией для ответа клиенту в ответе.
-            Документ с информацией для ответа клиенту: {message_content}\n\n
-            не путай цены на обычные услуги и на диагностику    
-            Если в документах нету информации по вопросу пользователя, то не придумывай ничего от себя и ответь что не знаешь       
+            Документ с информацией для ответа клиенту: {message_content}
+
             История разговора:
             {conversation_history}
-            Вопрос клиента: \n{query}
-        '''
 
-        answer = await self.request(self.system, user, 'gpt-4o-mini', 0)
-        
+            Вопрос клиента:
+            {query}
+        """
+
+        # Отправляем на модель
+        answer = await self.request(self.system, user_prompt, model='gpt-4o-mini', temp=0)
+
+        # Сохраняем новый кусок диалога в память
         self.user_memory[user_id].save_context({"input": query}, {"output": answer})
-        
+
         return {"answer": answer, "chunks": message_content}
