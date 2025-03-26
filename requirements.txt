@@ -12,7 +12,3 @@ faiss-cpu==1.8.0.post1
 aiofiles==24.1.0
 httpx==0.27.0
 openai==1.58.1
-
-# webserver
-django==5.1.2
-django-cors-headers==4.5.0
